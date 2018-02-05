@@ -1,7 +1,7 @@
 
     --- 下面的内容需要放在 init_worker_by_lua_block  里面 (此处是为了语法提示, 所以使用了单独文件)
     local upstream = require "ngx.upstream"
-    local sync = require "resty.upstream.upstream_pauser"
+    local sync = require "resty.upstream.upstreampauser"
     local get_upstreams = upstream.get_upstreams
 
     local hostnamebyupstream = { "web1"}

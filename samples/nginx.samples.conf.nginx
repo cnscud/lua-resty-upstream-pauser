@@ -109,7 +109,7 @@ server {
 
                 ngx.log(ngx.WARN, "info ", u, server_ip, server_port, tostatus)
 
-                local up = require "resty.upstream.upstreampause"
+                local up = require "resty.upstream.upstreampauser"
 
                 local ok, err = up.pause{
                     ip = server_ip, port = server_port, upstream = u, pause = pausestatus,

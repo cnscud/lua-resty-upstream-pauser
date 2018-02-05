@@ -50,23 +50,22 @@ local key_prefix_pause = "pd:" -- for pause sign of peer
 local key_prefix_lock = "pl:" -- for locker of upstream
 
 local function warn(...)
-    log(WARN, "pause_sync: ", ...)
+    log(WARN, "pauser: ", ...)
 end
 
 local function errlog(...)
-    log(ERR, "pause_sync: ", ...)
+    log(ERR, "pauser: ", ...)
 end
 
-local function debugnginx(...)
+local function debug(...)
     -- print("debug mode: ", debug_mode)
     if debug_mode then
-        log(DEBUG, "pause_sync: ", ...)
+        log(DEBUG, "pauser: ", ...)
     end
 end
 
--- fixme 调试用
-local function debug(...)
-    log(INFO, "pause_sync: ", ...)
+local function debugme(...)
+    log(INFO, "pauser: ", ...)
 end
 
 local function gen_peer_key(prefix, u, is_backup, id)
@@ -79,7 +78,8 @@ end
 --由外部调用设置了dict内的key, 所以此处不需要设置了 (和healthcheck的区别)
 local function set_peer_down_globally(ctx, is_backup, id, value)
     local u = ctx.upstream
-    debug("set peer down when set_peer_down_globally to --> down: ", tostring(value) , " by worker ", worker.pid())
+
+    debug("set peer down when set_peer_down_globally to --> ", tostring(value) , " by worker ", worker.pid())
     local ok, err = set_peer_down(u, is_backup, id, value)
     if not ok then
         errlog("failed to set peer down: ", err)
@@ -104,6 +104,8 @@ local function check_peer_pause(ctx, id, peer, is_backup)
         if err then
             errlog("failed to get peer down state: ", err)
         end
+        -- 没有值, 不需要动作
+        return
     else
         if res ==1 or res ==11 or res ==21 then
             down = true
@@ -154,6 +156,8 @@ local function upgrade_peers_pause_version(ctx, peers, is_backup)
             if err then
                 errlog("failed to get peer down state: ", err)
             end
+            -- 没有值, 不需要动作
+            return
         else
             if res ==1 or res ==11 or res ==21 then
                 down = true
@@ -217,7 +221,7 @@ local function get_lock(ctx)
 end
 
 local function do_check(ctx)
-    debug("pause_sync: run a check cycle for upstream ", ctx.upstream, " version: " , ctx.version,  " by worker " , worker.pid() )
+    debug("pauser: run a check cycle for upstream ", ctx.upstream, " version: " , ctx.version,  " by worker " , worker.pid() )
 
     check_peers_updates(ctx)
 
@@ -240,7 +244,7 @@ local function do_check(ctx)
             errlog("failed to publish new peers version: ", err)
         end
 
-        debug("set peers pause version ", ctx.upstream, " version: " , new_ver,  " by worker " , worker.pid() )
+        debug("set peers pause version ", ctx.upstream, " version -> " , new_ver,  " by worker " , worker.pid() )
         ctx.version = new_ver
         ctx.new_version = nil
 
@@ -356,8 +360,8 @@ local function check_mark_peer_pause(dict, ckpeers, pausevalue, u, servername, i
                 if pausevalue then
                     ok, err = dict:set(key_d, 1) -- 1 = init set , 11 = set and checked
                 else
-                    -- ok, err = dict:set(key_d, 0) -- 0 = normal peer, 10 = set and normal
-                    ok, err = dict:delete(key_d) -- remove = normal peer
+                    ok, err = dict:set(key_d, 0) -- 0 = normal peer, 10 = set and normal
+                    -- ok, err = dict:delete(key_d) -- remove = normal peer
                 end
 
                 if not ok then
@@ -405,7 +409,7 @@ function _M.pause(opts)
     end
 
     local servername = server_ip .. ":" .. server_port
-    local value
+    local value = false
     if tostatus == "true" then
         value = true
     end
