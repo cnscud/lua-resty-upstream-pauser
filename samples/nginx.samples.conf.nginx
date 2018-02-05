@@ -1,0 +1,130 @@
+    #
+    # sample for health check and upstream pause function
+    # Felix Zhang  by cnscud@gmail.com
+
+    # for health check
+    lua_package_path "/opt/conf/nginx/scripts/?.lua;;";
+
+    lua_shared_dict healthcheck 5m;
+
+    lua_socket_log_errors off;
+
+    # init_worker_by_lua_block {
+    # 请按需复制.
+    # 请复制 nginx_healthcheck.timer.conf.lua 的内容到这里.
+    # 请复制 nginx_pauser.timer.conf.lua 的内容到这里.
+    # }
+
+
+server {
+    listen       80;
+    server_name  localhost;
+
+    access_log  /opt/logs/nginx/localhost.access.log  body;
+
+    location / {
+        root   /opt/webapps/localhost;
+        index  index.html index.htm;
+    }
+
+    error_page 403 /403.html;
+
+    # redirect server error pages to the static page /50x.html
+    error_page   500 502 503 504  /50x.html;
+    location = /50x.html {
+        root   html;
+    }
+
+    # 查看共享内存的值, 方便调试.
+    location = /upstream_dict/ {
+        default_type text/plain;
+        content_by_lua_block {
+        local shared = ngx.shared
+            local dict = shared["healthcheck"]
+            for _, key in ipairs(dict:get_keys()) do
+                ngx.say("key:" .. key .. " value:" .. tostring(dict:get(key)))
+            end
+        }
+    }
+
+    location = /upstream_status {
+        access_log off;
+        allow 127.0.0.1;
+        deny all;
+
+        default_type text/plain;
+        content_by_lua_block {
+        local hc = require "resty.upstream.healthcheck"
+                        ngx.say("Nginx Worker PID: ", ngx.worker.pid())
+                        ngx.print(hc.status_page())
+        }
+    }
+
+    location = /upstream_list {
+        default_type text/plain;
+        content_by_lua_block {
+        local concat = table.concat
+                        local upstream = require "ngx.upstream"
+                        local get_servers = upstream.get_servers
+                        local get_upstreams = upstream.get_upstreams
+
+                        local us = get_upstreams()
+                        for _, u in ipairs(us) do
+                            ngx.say("upstream ", u, ":")
+                            local srvs, err = get_servers(u)
+                            if not srvs then
+                                ngx.say("failed to get servers in upstream ", u)
+                            else
+                                for _, srv in ipairs(srvs) do
+                                    local first = true
+                                    for k, v in pairs(srv) do
+                                        if first then
+                                            first = false
+                                            ngx.print("    ")
+                                        else
+                                            ngx.print(", ")
+                                        end
+                                        if type(v) == "table" then
+                                            ngx.print(k, " = {", concat(v, ", "), "}")
+                                        else
+                                            ngx.print(k, " = ", v)
+                                        end
+                                    end
+                                    ngx.print("\n")
+                                end
+                            end
+                        end
+        }
+    }
+
+    # 参数: upstream名字  server=ip:port status=要切换的状态: true/false
+    location /upstream_pause {
+        default_type 'text/plain';
+
+        content_by_lua_block {
+                local u = ngx.var.arg_upstream
+                local server_ip = ngx.var.arg_ip
+                local server_port = ngx.var.arg_port
+                local pausestatus = ngx.var.arg_pause
+
+                ngx.log(ngx.WARN, "info ", u, server_ip, server_port, tostatus)
+
+                local up = require "resty.upstream.upstreampause"
+
+                local ok, err = up.pause{
+                    ip = server_ip, port = server_port, upstream = u, pause = pausestatus,
+                    shm = "healthcheck" -- should same with health check now
+                }
+
+                if not ok then
+                    ngx.say("failed to call upstream pause: " .. err)
+                    return
+                else
+                    ngx.say("ok")
+                end
+        }
+    }
+
+
+
+}
