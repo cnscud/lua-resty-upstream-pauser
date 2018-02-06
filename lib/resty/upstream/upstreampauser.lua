@@ -114,7 +114,7 @@ local function check_peer_pause(ctx, id, peer, is_backup)
         if res <=1 then
             update = true
         end
-        if res ==1 or res ==11 then
+        if (res % 10) ==1 then
             down = true
         end
     end
@@ -185,12 +185,12 @@ local function upgrade_peers_pause_version(ctx, peers, is_backup)
                 errlog("failed to get peer down state: ", err)
             end
         else
-            if res ==1 or res ==11 then
+            if (res % 10 ) == 1 then
                 down = true
             end
 
             -- 强制设置, 不判断当前状态
-            warn("set peer down when upgrade pause version to --> ", tostring(down) , " on upstream ", u, " by worker ", worker.pid())
+            warn("set peer (", peer.name, ") down when upgrade pause version to --> ", tostring(down) , " on upstream ", u, " by worker ", worker.pid())
             local ok, err = set_peer_down(u, is_backup, id, down)
             if not ok then
                 errlog("failed to set peer down: ", err)

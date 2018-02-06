@@ -219,38 +219,48 @@ local function check_peer_pause(ctx, id, peer, is_backup)
     local key_d = gen_peer_key("pd:", u, is_backup, peer.id)
     local key_d_sign = gen_peer_key("spd:", u, is_backup, peer.id)
 
+    local update = false
     local down = false
     local res, err = dict:get(key_d)
-    local update = false
 
-    -- <10先不处理, 等pauser先处理.
-    if res == nil or res <10 then
-        if err then
-            errlog("failed to get peer down state: ", err)
+
+    -- 共同运行: 必须pauser先处理
+    if ctx.withpauser ==1 then
+        -- <10先不处理, 等pauser先处理.
+        if not res or res <10 then
+            if err then
+                errlog("failed to get peer down state: ", err)
+            end
+
+            down = (res ==1)
+
+            if not down then
+                return 0
+            end
+            return 1 -- don't need health check now
+        else
+            down = (res ==11)
+
+            local sign_res, err = dict:get(key_d_sign)
+            if not sign_res or (sign_res ~= res) then
+                update = true
+            end
         end
 
-        if res == 1 then
-            down = true
-        elseif res == 0 then
-            down = false
-        end
-
-        if not down then
-            return 0
-        end
-        return 1 -- don't need health check now
+    -- 独立运行: pauser不会处理
     else
-        if res ==11 then
-            down = true
-        elseif res == 10 then
-            down = false
-        end
+        if not res then
+            return 0
+        else
+            down =  (res % 10  == 1)
 
-        local sign_res, err = dict:get(key_d_sign)
-        if not sign_res or (sign_res and sign_res ~= res) then
-            update = true
+            local sign_res, err = dict:get(key_d_sign)
+            if not sign_res or ( (sign_res % 10) ~= (res % 10)) then
+                update = true
+            end
         end
     end
+
 
     -- 避免状态不一致: 所以up也处理一次
     if update then
@@ -264,8 +274,8 @@ local function check_peer_pause(ctx, id, peer, is_backup)
             set_peer_down_globally(ctx, is_backup, id, down)
         end
 
-        -- 标记和pd一样, 表明已经处理过了
-        local ok, err = dict:set(key_d_sign, res)
+        -- 标记: 和pd一样, 表明已经处理过了
+        local ok, err = dict:set(key_d_sign, (res % 10) + 10 )
         if not ok then
             errlog("failed to set peer sign_pause_state to  " .. res .. " ", err)
         end
@@ -695,7 +705,13 @@ function _M.spawn_checker(opts)
         end
     end
 
-    -- debug("interval: ", interval)
+    -- 默认是一起运行:
+    -- 0 标识 healthcheck独立运行
+    -- 1 标识 healthcheck和pauser一起运行
+    local withpauser = opts.withpauser
+    if not withpauser then
+        withpauser = 1
+    end
 
     local concur = opts.concurrency
     if not concur then
@@ -751,6 +767,7 @@ function _M.spawn_checker(opts)
         valid_response = valid_response, -- valid response
         version = 0,
         concurrency = concur,
+        withpauser = withpauser,
     }
 
     local ok, err = new_timer(0, check, ctx)
