@@ -237,7 +237,7 @@ local function check_peer_pause(ctx, id, peer, is_backup)
 
 
     if not peer.down and down then
-        warn("peer ", peer.name, " is turned down for pause command on upstream " , u)
+        warn("peer ", peer.name, " is turned down for pauser call on upstream " , u)
         peer.down = true
         set_peer_down_globally(ctx, is_backup, id, true)
     end

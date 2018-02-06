@@ -10,6 +10,7 @@
     lua_socket_log_errors off;
 
     # init_worker_by_lua_block {
+    # 也可以使用 init_worker_by_lua_file 引用外部文件.
     # 请按需复制.
     # 请复制 nginx_healthcheck.timer.conf.lua 的内容到这里.
     # 请复制 nginx_pauser.timer.conf.lua 的内容到这里.

@@ -49,6 +49,8 @@ local key_prefix_version = "pv:" --for version of upstream
 local key_prefix_pause = "pd:" -- for pause sign of peer
 local key_prefix_lock = "pl:" -- for locker of upstream
 
+local upstream_pauser_statuses = {}
+
 local function warn(...)
     log(WARN, "pauser: ", ...)
 end
@@ -251,6 +253,22 @@ local function do_check(ctx)
     end
 end
 
+local function update_upstream_pauser_status(upstream, success)
+    local cnt = upstream_pauser_statuses[upstream]
+    if not cnt then
+        cnt = 0
+    end
+
+    if success then
+        cnt = cnt + 1
+    else
+        cnt = cnt - 1
+    end
+
+    upstream_pauser_statuses[upstream] = cnt
+end
+
+
 local check
 check = function (premature, ctx)
     if premature then
@@ -270,6 +288,7 @@ check = function (premature, ctx)
             errlog("failed to create timer: ", err)
         end
 
+        update_upstream_pauser_status(ctx.upstream, false)
         return
     end
 end
@@ -345,6 +364,7 @@ function _M.spawn_sync(opts)
 
     ngx.log(ngx.INFO, "start pause sync timer for " , u, " ...")
 
+    update_upstream_checker_status(u, true)
     return true
 end
 
@@ -413,6 +433,13 @@ function _M.pause(opts)
     if tostatus == "true" then
         value = true
     end
+
+    -- 如果没有timer 则应该警告
+    local ncheckers = upstream_pauser_statuses[u]
+    if not ncheckers or ncheckers == 0 then
+        return nil, "not find pauser time for the upstream " ..u
+    end
+
 
     local ppeers, err = get_primary_peers(u)
     local ret, err = check_mark_peer_pause(dict, ppeers, value, u, servername, false)
