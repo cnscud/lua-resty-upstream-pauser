@@ -211,43 +211,58 @@ local function trim(s)
     return s:match'^%s*(.*%S)' or ''
 end
 
--- 1. 检查peer是否被通知暂停服务, 如果是, 则设置down.
--- 2. 此处和upstream_pause_sync的check_peer_pause函数区别是: 此处没有判断是否需要设置 down = false, 因为只要不存在pd这个key, peer会因为healthcheck机制自动up(如果正常)
--- -- 当然如果peer本身fail, 就有一些小区别了, 强制设置会导致一些fail, 不过没有主动healthcheck的话也没有办法, 所以这里不主动设置反而是优点.
+-- 检查peer被pauser调用的状态, 以同步状态, 避免冲突.
 local function check_peer_pause(ctx, id, peer, is_backup)
     local dict = ctx.dict
     local u = ctx.upstream
 
-    local key_d = gen_peer_key("pd:", u, isbackup, peer.id)
+    local key_d = gen_peer_key("pd:", u, is_backup, peer.id)
+    local key_d_sign = gen_peer_key("spd:", u, is_backup, peer.id)
 
     local down = false
     local res, err = dict:get(key_d)
-    if res == nil then
+    local update = false
+
+    -- <10先不处理, 等pauser先处理.
+    if res == nil or res <10 then
         if err then
             errlog("failed to get peer down state: ", err)
         end
         return 0
     else
-        if res ==1 or res ==11 or res ==21 then
+        if res ==11 then
             down = true
-        else
-            return 0
+        elseif res == 10 then
+            down = false
+        end
+
+        local sign_res, err = dict:get(key_d_sign)
+        if not sign_res or (sign_res and sign_res ~= res) then
+            update = true
         end
     end
 
+    -- 避免状态不一致: 所以up也处理一次
+    if update then
+        if (peer.down and not down) or (not peer.down and down) then
+            if down then
+                warn("peer ", peer.name, " is turned >> down for pauser call on upstream " , u)
+            else
+                warn("peer ", peer.name, " is turned >> up for pauser call on upstream " , u)
+            end
+            peer.down = down
+            set_peer_down_globally(ctx, is_backup, id, down)
+        end
 
-    if not peer.down and down then
-        warn("peer ", peer.name, " is turned down for pauser call on upstream " , u)
-        peer.down = true
-        set_peer_down_globally(ctx, is_backup, id, true)
-    end
-
-    -- 没有实际用途, 仅用来标记已经处理了 for debug
-    if res ~=11 then
-        local ok, err = dict:set(key_d, 11)
+        -- 标记和pd一样, 表明已经处理过了
+        local ok, err = dict:set(key_d_sign, res)
         if not ok then
-            errlog("failed to set peer pause_state to 11: ", err)
+            errlog("failed to set peer sign_pause_state to  " .. res .. " ", err)
         end
+    end
+
+    if not down then
+        return 0
     end
 
     return 1 -- don't need health check now

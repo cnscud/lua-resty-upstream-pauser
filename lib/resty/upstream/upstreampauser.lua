@@ -98,8 +98,10 @@ local function check_peer_pause(ctx, id, peer, is_backup)
     local dict = ctx.dict
     local u = ctx.upstream
 
-    local key_d = gen_peer_key(key_prefix_pause, u, isbackup, peer.id)
+    local key_d = gen_peer_key(key_prefix_pause, u, is_backup, peer.id)
     local res, err = dict:get(key_d)
+
+    local update = false --是否变化了
 
     local down = false
     if res == nil then
@@ -109,21 +111,44 @@ local function check_peer_pause(ctx, id, peer, is_backup)
         -- 没有值, 不需要动作
         return
     else
-        if res ==1 or res ==11 or res ==21 then
+        if res <=1 then
+            update = true
+        end
+        if res ==1 or res ==11 then
             down = true
         end
     end
 
-    if (peer.down and not down) or (not peer.down and down) then
-        if down then
-            warn("peer ", peer.name, " is turned --> down for pause command on upstream " , u)
-        else
-            warn("peer ", peer.name, " is turned --> up for pause command on upstream " , u)
+    -- 独立判断version变化了, 即使被别的timer改变了状态 (例如healthcheck)
+    -- 如果没有变化, 则忽略了 (有可能被别的模块修改了状态, 但是此处也忽略了)
+    if not update then
+        return
+    end
+
+    -- 不判断, 直接进行处理. (有可能缓存状态和实际状态不一致)
+    if down then
+        warn("peer ", peer.name, " is turned --> down for pause command on upstream " , u, " by worker ", worker.pid())
+    else
+        warn("peer ", peer.name, " is turned --> up for pause command on upstream " , u, " by worker ", worker.pid())
+    end
+
+    peer.down = down
+    set_peer_down_globally(ctx, is_backup, id, down)
+
+    -- 标记已经处理过了, 避免重复处理
+    if res <=1 then
+        local update_value = res + 10
+        local ok, err = dict:set(key_d, update_value)
+        if not ok then
+            errlog("failed to set peer pause_state to  " .. update_value .. " ", err)
         end
 
-        peer.down = down
-        set_peer_down_globally(ctx, is_backup, id, down)
+        -- 为了版本同步
+        if not ctx.new_version then
+            ctx.new_version = true
+        end
     end
+
 end
 
 
@@ -144,6 +169,7 @@ local function check_peers(ctx, peers, is_backup)
     end
 end
 
+-- 发现版本变化时才执行, 所以不会每次执行的.
 local function upgrade_peers_pause_version(ctx, peers, is_backup)
     local dict = ctx.dict
     local u = ctx.upstream
@@ -161,21 +187,21 @@ local function upgrade_peers_pause_version(ctx, peers, is_backup)
             -- 没有值, 不需要动作
             return
         else
-            if res ==1 or res ==11 or res ==21 then
+            if res ==1 or res ==11 then
                 down = true
             end
         end
 
-        if (peer.down and not down) or (not peer.down and down) then
-            debug("set peer down when upgrade pause version to --> ", tostring(down) , " by worker ", worker.pid())
-            local ok, err = set_peer_down(u, is_backup, id, down)
-            if not ok then
-                errlog("failed to set peer down: ", err)
-            else
-                -- update our cache too
-                peer.down = down
-            end
+        -- 强制设置, 不判断当前状态
+        warn("set peer down when upgrade pause version to --> ", tostring(down) , " by worker ", worker.pid())
+        local ok, err = set_peer_down(u, is_backup, id, down)
+        if not ok then
+            errlog("failed to set peer down: ", err)
+        else
+            -- update our cache too
+            peer.down = down
         end
+
     end
 end
 
@@ -194,9 +220,9 @@ local function check_peers_updates(ctx)
             ctx.new_version = true
         end
 
-    elseif ctx.version < ver then
+    elseif ctx.version < ver then -- 发现版本变化时才执行
         -- debug("upgrading peers pause version to ", ver)
-        debug("upgrading peers pause version ", ctx.upstream, " version -> " , ver,  " by worker " , worker.pid() )
+        warn("upgrading peers pause version ", ctx.upstream, " version -> " , ver,  " by worker " , worker.pid() )
         upgrade_peers_pause_version(ctx, ctx.primary_peers, false);
         upgrade_peers_pause_version(ctx, ctx.backup_peers, true);
         ctx.version = ver
@@ -362,9 +388,9 @@ function _M.spawn_sync(opts)
         return nil, "failed to create timer: " .. err
     end
 
-    ngx.log(ngx.INFO, "start pause sync timer for " , u, " ...")
+    ngx.log(ngx.INFO, "start pauser timer for " , u, " ...")
 
-    update_upstream_checker_status(u, true)
+    update_upstream_pauser_status(u, true)
     return true
 end
 
