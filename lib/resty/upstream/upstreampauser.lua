@@ -180,28 +180,25 @@ local function upgrade_peers_pause_version(ctx, peers, is_backup)
         local key = gen_peer_key(key_prefix_pause, u, is_backup, id)
         local down = false
         local res, err = dict:get(key)
-        if res == nil then
+        if not res then
             if err then
                 errlog("failed to get peer down state: ", err)
             end
-            -- 没有值, 不需要动作
-            return
         else
             if res ==1 or res ==11 then
                 down = true
             end
-        end
 
-        -- 强制设置, 不判断当前状态
-        warn("set peer down when upgrade pause version to --> ", tostring(down) , " by worker ", worker.pid())
-        local ok, err = set_peer_down(u, is_backup, id, down)
-        if not ok then
-            errlog("failed to set peer down: ", err)
-        else
-            -- update our cache too
-            peer.down = down
+            -- 强制设置, 不判断当前状态
+            warn("set peer down when upgrade pause version to --> ", tostring(down) , " on upstream ", u, " by worker ", worker.pid())
+            local ok, err = set_peer_down(u, is_backup, id, down)
+            if not ok then
+                errlog("failed to set peer down: ", err)
+            else
+                -- update our cache too
+                peer.down = down
+            end
         end
-
     end
 end
 
