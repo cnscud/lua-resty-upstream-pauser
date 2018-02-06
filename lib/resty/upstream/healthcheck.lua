@@ -228,7 +228,17 @@ local function check_peer_pause(ctx, id, peer, is_backup)
         if err then
             errlog("failed to get peer down state: ", err)
         end
-        return 0
+
+        if res == 1 then
+            down = true
+        elseif res == 0 then
+            down = false
+        end
+
+        if not down then
+            return 0
+        end
+        return 1 -- don't need health check now
     else
         if res ==11 then
             down = true
