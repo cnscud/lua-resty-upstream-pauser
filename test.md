@@ -14,5 +14,5 @@
 * 和healthcheck集成
 * 利用healthcheck, 不启动pauser的timer (待定)
 * 集成时: 设置A, 在设置B 也会影响A 
-
+* 集成时: 重复调用up, 确保每一次都up, 然后healthcheck正常检查(一般指down)
 

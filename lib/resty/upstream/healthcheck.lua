@@ -19,6 +19,7 @@ local ceil = math.ceil
 local spawn = ngx.thread.spawn
 local wait = ngx.thread.wait
 local pcall = pcall
+local worker = ngx.worker
 
 local _M = {
     _VERSION = '0.05'
@@ -211,6 +212,17 @@ local function trim(s)
     return s:match'^%s*(.*%S)' or ''
 end
 
+local function reset_nok_value(ctx, is_backup, id)
+    local dict = ctx.dict
+    local u = ctx.upstream
+    local key = gen_peer_key("nok:", u, is_backup, id)
+
+    local ok, err = dict:set(key, 0)
+    if not ok then
+        errlog("failed to set peer nok key: ", err)
+    end
+end
+
 -- 检查peer被pauser调用的状态, 以同步状态, 避免冲突.
 local function check_peer_pause(ctx, id, peer, is_backup)
     local dict = ctx.dict
@@ -261,16 +273,22 @@ local function check_peer_pause(ctx, id, peer, is_backup)
         end
     end
 
+    -- warn("check_peer_pause down:" , tostring(down), " update: " , tostring(update))
 
     -- 避免状态不一致: 所以up也处理一次
     if update then
+        -- think: 要不要考虑强制设置哪? 实际状态可能和现在不一致了
         if (peer.down and not down) or (not peer.down and down) then
             if down then
-                warn("peer ", peer.name, " is turned >> down for pauser call on upstream " , u)
+                warn("peer ", peer.name, " is turned >> down for pauser call on upstream " , u, " by worker ", worker.pid())
             else
-                warn("peer ", peer.name, " is turned >> up for pauser call on upstream " , u)
+                warn("peer ", peer.name, " is turned >> up for pauser call on upstream " , u, " by worker ", worker.pid())
             end
+
             peer.down = down
+            -- 强制重置nok的值, 避免立刻的失败从而导致失败
+            reset_nok_value(ctx, is_backup, id)
+
             set_peer_down_globally(ctx, is_backup, id, down)
         end
 
@@ -282,6 +300,11 @@ local function check_peer_pause(ctx, id, peer, is_backup)
     end
 
     if not down then
+        -- 避免立刻的失败, 导致的错误  或者应该重置nok的值
+        if update then
+            return 2
+        end
+
         return 0
     end
 
@@ -298,7 +321,7 @@ local function check_peer(ctx, id, peer, is_backup)
 
     -- 检查 pause status, 如果有, 则跳过检查
     local ret = check_peer_pause(ctx, id, peer, is_backup)
-    if ret == 1 then
+    if ret >= 1 then
         return
     end
 
@@ -522,6 +545,7 @@ local function upgrade_peers_version(ctx, peers, is_backup)
             down = true
         end
         if (peer.down and not down) or (not peer.down and down) then
+            warn("set peer (", peer.name, ") down when upgrade version to --> ", tostring(down) , " on upstream ", u, " by worker ", worker.pid())
             local ok, err = set_peer_down(u, is_backup, id, down)
             if not ok then
                 errlog("failed to set peer down: ", err)

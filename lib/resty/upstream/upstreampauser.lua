@@ -48,6 +48,7 @@ local get_backup_peers = upstream.get_backup_peers
 local key_prefix_version = "pv:" --for version of upstream
 local key_prefix_pause = "pd:" -- for pause sign of peer
 local key_prefix_lock = "pl:" -- for locker of upstream
+local key_prefix_peerversion = "ppv:" -- for version of peer command
 
 local upstream_pauser_statuses = {}
 
@@ -92,6 +93,38 @@ local function set_peer_down_globally(ctx, is_backup, id, value)
     end
 end
 
+local function incr_peer_version(ctx, id, peer, is_backup)
+    local dict = ctx.dict
+    local u = ctx.upstream
+
+    local key = gen_peer_key(key_prefix_peerversion, u, is_backup, id)
+    local peerversion, err = dict:get(key)
+    if not peerversion then
+        if err then
+            errlog("failed to get peer ppv key: ", err)
+            return
+        end
+        peerversion = 1
+
+        -- below may have a race condition, but it is fine for our
+        -- purpose here.
+        local ok, err = dict:set(key, 1)
+        if not ok then
+            errlog("failed to set peer ppv key: ", err)
+        else
+            peer.version = peerversion
+        end
+    else
+        peerversion = peerversion + 1
+
+        local ok, err = dict:incr(key, 1)
+        if not ok then
+            errlog("failed to incr peer ppv key: ", err)
+        else
+            peer.version = peerversion
+        end
+    end
+end
 
 -- 检查peer是否被通知暂停服务, 如果是, 则设置down
 local function check_peer_pause(ctx, id, peer, is_backup)
@@ -132,6 +165,8 @@ local function check_peer_pause(ctx, id, peer, is_backup)
         warn("peer ", peer.name, " is turned --> up for pause command on upstream " , u, " by worker ", worker.pid())
     end
 
+    -- incr version of peer
+    incr_peer_version(ctx, id, peer, is_backup)
     peer.down = down
     set_peer_down_globally(ctx, is_backup, id, down)
 
@@ -169,7 +204,8 @@ local function check_peers(ctx, peers, is_backup)
     end
 end
 
--- 发现版本变化时才执行, 所以不会每次执行的.
+-- 不需要每次检查时都设置up --如果一个peer因为故障无法访问(会被healthcheck设置为down), 则总是会被pauser拉起, ...显然有问题.
+-- 发现版本变化时才执行, 所以不会每次执行的(但是每次调用, 会检查所有的key -- 每个peer都有个一个版本, 所以不会有问题了).
 local function upgrade_peers_pause_version(ctx, peers, is_backup)
     local dict = ctx.dict
     local u = ctx.upstream
@@ -189,15 +225,27 @@ local function upgrade_peers_pause_version(ctx, peers, is_backup)
                 down = true
             end
 
-            -- 强制设置, 不判断当前状态
-            warn("set peer (", peer.name, ") down when upgrade pause version to --> ", tostring(down) , " on upstream ", u, " by worker ", worker.pid())
-            local ok, err = set_peer_down(u, is_backup, id, down)
-            if not ok then
-                errlog("failed to set peer down: ", err)
-            else
-                -- update our cache too
-                peer.down = down
+            local key_ppv = gen_peer_key(key_prefix_peerversion, u, is_backup, id)
+            local ppv, err = dict:get(key_ppv)
+            if not ppv then
+                if err then
+                    errlog("failed to get peer version: ", err)
+                end
             end
+
+            if peer.version < ppv then
+                -- 强制设置, 不判断当前状态
+                warn("set peer (", peer.name, ") down when upgrade pause version to --> ", tostring(down) , " on upstream ", u, " by worker ", worker.pid())
+                local ok, err = set_peer_down(u, is_backup, id, down)
+                if not ok then
+                    errlog("failed to set peer down: ", err)
+                else
+                    -- update our cache too
+                    peer.down = down
+                    peer.version = ppv
+                end
+            end
+
         end
     end
 end
@@ -322,6 +370,9 @@ local function preprocess_peers(peers)
         local p = peers[i]
         local name = p.name
 
+        -- 初始化版本
+        p.version = 0
+
         if name then
             local from, to, err = re_find(name, [[^(.*):\d+$]], "jo", nil, 1)
             if from then
@@ -400,12 +451,17 @@ local function check_mark_peer_pause(dict, ckpeers, pausevalue, u, servername, i
             if peer.name == servername then
                 local key_d = gen_peer_key(key_prefix_pause, u, is_backup, peer.id)
                 local ok, err
+
                 if pausevalue then
                     ok, err = dict:set(key_d, 1) -- 1 = init set , 11 = set and checked
                 else
                     ok, err = dict:set(key_d, 0) -- 0 = normal peer, 10 = set and normal
                     -- ok, err = dict:delete(key_d) -- remove = normal peer
                 end
+
+                local key_d_sign = gen_peer_key("spd:", u, is_backup, peer.id)
+                -- reset spd value for next check
+                dict:delete(key_d_sign)
 
                 if not ok then
                     ngx.log(ngx.ERR, "failed set peer pause_status " .. peer.name .. " value: " .. tostring(pausevalue) .. " on upstream " .. u)
